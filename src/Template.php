@@ -158,7 +158,7 @@ class Template
             '/{literal}([\s\S]*){\/literal}/Ui',
             function ($matchs) {
                 $key = '#' . md5($matchs[1]) . '#';
-                $this->literals[$key] = htmlspecialchars($matchs[1]);
+                $this->literals[$key] = $matchs[1];
                 return $key;
             },
             $html
