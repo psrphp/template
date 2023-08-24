@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace PsrPHP\Template;
 
-use PsrPHP\Includer\Wrapper;
 use Psr\SimpleCache\CacheInterface;
 use SplPriorityQueue;
 
@@ -23,31 +22,23 @@ class Template
     public function __construct(
         CacheInterface $cache = null
     ) {
-        if ($cache) {
-            $this->setCache($cache);
-        }
+        $this->cache = $cache;
 
         $type_list = ['default'];
         if (isset($_SERVER['HTTP_USER_AGENT'])) {
-            if (stripos($_SERVER['HTTP_USER_AGENT'], 'iphone') || stripos($_SERVER['HTTP_USER_AGENT'], 'android')) {
+            if (stripos($_SERVER['HTTP_USER_AGENT'], 'iphone')) {
                 array_unshift($type_list, 'mobile');
+                array_unshift($type_list, 'iphone');
+            } elseif (stripos($_SERVER['HTTP_USER_AGENT'], 'android')) {
+                array_unshift($type_list, 'mobile');
+                array_unshift($type_list, 'android');
             } elseif (stripos($_SERVER['HTTP_USER_AGENT'], 'ipad')) {
                 array_unshift($type_list, 'ipad');
             } else {
                 array_unshift($type_list, 'pc');
             }
         }
-        $this->setTypeList($type_list);
-    }
-
-    public function setTypeList(array $type_list)
-    {
         $this->type_list = $type_list;
-    }
-
-    public function setCache(CacheInterface $cache)
-    {
-        $this->cache = $cache;
     }
 
     public function addPath(string $name, string $path, $priority = 0): self
@@ -115,7 +106,7 @@ class Template
         return $this->render();
     }
 
-    public function getTplFile(string $tpl): ?string
+    private function getTplFile(string $tpl): ?string
     {
         list($file, $name) = explode('@', $tpl);
         if ($name && $file && isset($this->path_list[$name])) {
@@ -253,7 +244,17 @@ class Template
             return '';
         }
         ob_start();
-        Wrapper::load($this->code, $this->data, $this->filename);
-        return ob_get_clean();
+        try {
+            $__file__ = tempnam(sys_get_temp_dir(), 'tpl_' . $this->filename);
+            file_put_contents($__file__, $this->code);
+            extract($this->data);
+            include $__file__;
+            unlink($__file__);
+            return ob_get_clean();
+        } catch (\Throwable $th) {
+            @unlink($__file__);
+            ob_end_clean();
+            throw $th;
+        }
     }
 }
