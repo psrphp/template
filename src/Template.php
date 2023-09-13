@@ -10,7 +10,6 @@ use SplPriorityQueue;
 class Template
 {
     protected $cache = null;
-    protected $type_list = [];
     protected $path_list = [];
     protected $extends = [];
 
@@ -23,22 +22,6 @@ class Template
         CacheInterface $cache = null
     ) {
         $this->cache = $cache;
-
-        $type_list = ['default'];
-        if (isset($_SERVER['HTTP_USER_AGENT'])) {
-            if (stripos($_SERVER['HTTP_USER_AGENT'], 'iphone')) {
-                array_unshift($type_list, 'mobile');
-                array_unshift($type_list, 'iphone');
-            } elseif (stripos($_SERVER['HTTP_USER_AGENT'], 'android')) {
-                array_unshift($type_list, 'mobile');
-                array_unshift($type_list, 'android');
-            } elseif (stripos($_SERVER['HTTP_USER_AGENT'], 'ipad')) {
-                array_unshift($type_list, 'ipad');
-            } else {
-                array_unshift($type_list, 'pc');
-            }
-        }
-        $this->type_list = $type_list;
     }
 
     public function addPath(string $name, string $path, $priority = 0): self
@@ -111,11 +94,9 @@ class Template
         list($file, $name) = explode('@', $tpl);
         if ($name && $file && isset($this->path_list[$name])) {
             foreach (clone $this->path_list[$name] as $path) {
-                foreach ($this->type_list as $type) {
-                    $fullname = $path . DIRECTORY_SEPARATOR . $type . DIRECTORY_SEPARATOR . $file . '.php';
-                    if (is_file($fullname)) {
-                        return $fullname;
-                    }
+                $fullname = $path . DIRECTORY_SEPARATOR . $file . '.php';
+                if (is_file($fullname)) {
+                    return $fullname;
                 }
             }
         }
