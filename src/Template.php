@@ -225,17 +225,11 @@ class Template
             return '';
         }
         ob_start();
-        try {
-            $__file__ = tempnam(sys_get_temp_dir(), 'tpl_' . $this->filename);
-            file_put_contents($__file__, $this->code);
-            extract($this->data);
-            include $__file__;
-            unlink($__file__);
-            return ob_get_clean();
-        } catch (\Throwable $th) {
-            @unlink($__file__);
-            ob_end_clean();
-            throw $th;
-        }
+        extract($this->data);
+        $____file____ = tempnam(sys_get_temp_dir(), 'tpl_' . $this->filename) . '.php';
+        file_put_contents($____file____, $this->code);
+        include $____file____;
+        @unlink($____file____);
+        return ob_get_clean();
     }
 }
