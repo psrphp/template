@@ -6,30 +6,54 @@ namespace PsrPHP\Template;
 
 use Psr\SimpleCache\CacheInterface;
 use SplPriorityQueue;
+use Throwable;
 
 class Template
 {
     protected $cache = null;
-    protected $path_list = [];
-    protected $extends = [];
 
-    protected $literals = [];
-    protected $code = '';
+    protected $extends = [];
+    protected $finder;
+
     protected $data = [];
     protected $filename = '';
 
-    public function __construct(
-        CacheInterface $cache = null
-    ) {
-        $this->cache = $cache;
+    public function __construct()
+    {
+        $this->finder = new SplPriorityQueue;
+
+        if (!in_array('tpls', stream_get_wrappers())) {
+            stream_wrapper_register('tpls', Stream::class);
+        }
+
+        $this->addFinder(function (string $tpl): ?string {
+            if (is_file($tpl)) {
+                return file_get_contents($tpl);
+            }
+            return null;
+        }, -100);
     }
 
-    public function addPath(string $name, string $path, $priority = 0): self
+    public function setCache(CacheInterface $cache): self
     {
-        if (!isset($this->path_list[$name])) {
-            $this->path_list[$name] = new SplPriorityQueue;
+        $this->cache = $cache;
+        return $this;
+    }
+
+    private function getContent(string $tpl): string
+    {
+        foreach (clone $this->finder as $finder) {
+            $res = $finder($tpl);
+            if (!is_null($res)) {
+                return $res;
+            }
         }
-        $this->path_list[$name]->insert($path, $priority);
+        throw new TplNotFoundException('template [' . $tpl . '] is not found!');
+    }
+
+    public function addFinder(callable $callable, $priority = 0): self
+    {
+        $this->finder->insert($callable, $priority);
         return $this;
     }
 
@@ -49,105 +73,56 @@ class Template
         return $this;
     }
 
-    public function renderFromFile(string $file, array $data = []): string
+    public function render(string $tpl, array $data = []): string
+    {
+        return $this->renderString($this->getContent($tpl), $data, $tpl);
+    }
+
+    public function renderString(string $string, array $data = [], string $filename = null): string
     {
         if ($data) {
             $this->assign($data);
         }
 
-        $cache_key = $this->getCacheKey($file);
+        if (is_string($filename)) {
+            $cache_key = str_replace(['{', '}', '(', ')', '/', '\\', '@', ':'], '_', 'tpl_' . $filename);
+        } else {
+            $cache_key = 'tpl_' . md5($string);
+        }
 
-        if (!$this->cache || !$code = $this->cache->get($cache_key)) {
-            $code = $this->parseString($this->getTplFileContent($file));
+        if ($this->cache && $this->cache->has($cache_key)) {
+            $code = $this->cache->get($cache_key);
+        } else {
+            $code = $this->parse($string);
             if ($this->cache) {
                 $this->cache->set($cache_key, $code);
             }
         }
 
-        $this->code = $code;
-        $this->filename = $file;
-        return $this->render();
-    }
+        $this->filename = 'tpls://' . (is_string($filename) ? $filename : md5($string));
+        file_put_contents($this->filename, $code);
 
-    public function renderFromString(string $string, array $data = [], string $filename = ''): string
-    {
-        if ($data) {
-            $this->assign($data);
-        }
-
-        $cache_key = $this->getCacheKey($filename ?: md5($string));
-
-        if (!$this->cache || !$code = $this->cache->get($cache_key)) {
-            $code = $this->parseString($string);
-            if ($this->cache) {
-                $this->cache->set($cache_key, $code);
+        return (function () {
+            try {
+                ob_start();
+                extract($this->data);
+                include $this->filename;
+                return ob_get_clean();
+            } catch (Throwable $th) {
+                throw new RenderException($th->getMessage(), $th->getCode(), $th);
             }
-        }
-
-        $this->code = $code;
-        $this->filename = $filename;
-        return $this->render();
+        })();
     }
 
-    private function getTplFile(string $tpl): ?string
+    public function parse(string $string): string
     {
-        list($file, $name) = explode('@', $tpl);
-        if ($name && $file && isset($this->path_list[$name])) {
-            foreach (clone $this->path_list[$name] as $path) {
-                $fullname = $path . DIRECTORY_SEPARATOR . $file . '.php';
-                if (is_file($fullname)) {
-                    return $fullname;
-                }
-            }
-        }
-        return null;
-    }
+        $literals = [];
+        $string = preg_replace_callback('/{literal}([\s\S]*){\/literal}/Ui', function ($matchs) use (&$literals) {
+            $key = '#' . md5($matchs[1]) . '#';
+            $literals[$key] = $matchs[1];
+            return $key;
+        }, $string);
 
-    private function getCacheKey(string $name): string
-    {
-        return str_replace(['{', '}', '(', ')', '/', '\\', '@', ':'], '_', 'tpl_' . $name);
-    }
-
-    private function parseString(string $string): string
-    {
-        $string = $this->buildLiteral($string);
-        $string = $this->parseTag($string);
-        $string = $this->parseLiteral($string);
-        return $string;
-    }
-
-    private function getTplFileContent(string $tpl): string
-    {
-        if ($filename = $this->getTplFile($tpl)) {
-            return file_get_contents($filename);
-        }
-        throw new NotFoundException('template [' . $tpl . '] is not found!');
-    }
-
-    private function buildLiteral(string $html): string
-    {
-        return preg_replace_callback(
-            '/{literal}([\s\S]*){\/literal}/Ui',
-            function ($matchs) {
-                $key = '#' . md5($matchs[1]) . '#';
-                $this->literals[$key] = $matchs[1];
-                return $key;
-            },
-            $html
-        );
-    }
-
-    private function parseLiteral(string $html): string
-    {
-        return str_replace(
-            array_keys($this->literals),
-            array_values($this->literals),
-            $html
-        );
-    }
-
-    private function parseTag(string $html): string
-    {
         $tags = [
             '/\{(foreach|if|for|switch|while)\s+(.*)\}/Ui' => function ($matchs) {
                 return '<?php ' . $matchs[1] . ' (' . $matchs[2] . ') { ?>';
@@ -192,12 +167,11 @@ class Template
                 return '<?php }else{ ?>';
             },
             '/\{include\s*([\w\-_\.,@\/]*)\}/Ui' => function ($matchs) {
-                $html = '';
-                $tpls = explode(',', $matchs[1]);
-                foreach ($tpls as $tpl) {
-                    $html .= $this->getTplFileContent($tpl);
+                $string = '';
+                foreach (explode(',', $matchs[1]) as $tpl) {
+                    $string .= $this->getContent($tpl);
                 }
-                return $this->parseTag($this->buildLiteral($html));
+                return $this->parse($string);
             },
             '/\{(\$[^{}\'"]*)((\.[^{}\'"]+)+)\}/Ui' => function ($matchs) {
                 return '<?php echo htmlspecialchars(' . $matchs[1] . substr(str_replace('.', '\'][\'', $matchs[2]), 2) . '\']' . '); ?>';
@@ -208,28 +182,15 @@ class Template
             '/\{:([^{}]*)\s*;?\s*\}/Ui' => function ($matchs) {
                 return '<?php echo htmlspecialchars(' . $matchs[1] . '); ?>';
             },
-            '/\?>[\s]*<\?php/is' => function ($matchs) {
-                return '';
-            },
         ];
         $tags = array_merge($tags, $this->extends);
         foreach ($tags as $preg => $callback) {
-            $html = preg_replace_callback($preg, $callback, $html);
+            $string = preg_replace_callback($preg, $callback, $string);
         }
-        return $html;
-    }
-
-    private function render(): string
-    {
-        if (!strlen($this->code)) {
-            return '';
-        }
-        ob_start();
-        extract($this->data);
-        $____file____ = tempnam(sys_get_temp_dir(), 'tpl_' . $this->filename) . '.php';
-        file_put_contents($____file____, $this->code);
-        include $____file____;
-        @unlink($____file____);
-        return ob_get_clean();
+        return str_replace(
+            array_keys($literals),
+            array_values($literals),
+            $string
+        );
     }
 }

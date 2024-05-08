@@ -6,6 +6,6 @@ namespace PsrPHP\Template;
 
 use Exception;
 
-class NotFoundException extends Exception
+class RenderException extends Exception
 {
 }
